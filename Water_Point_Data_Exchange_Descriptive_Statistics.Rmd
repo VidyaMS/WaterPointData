@@ -1,0 +1,215 @@
+---
+title: "WaterPointDataExchange Descriptive Statistics"
+author: "Vidya"
+date: "12 July 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE , comment = "" )
+```
+
+```{r}
+library(tidyverse)
+library(gridExtra)
+
+water_data <- read.csv("Water_Point_Data_Exchange_Complete_Dataset.csv" , header = TRUE , stringsAsFactors = FALSE)
+water_data$X.status_id.f <- as.factor(water_data$X.status_id) 
+water_data$X.source.f <- as.factor(water_data$X.source) 
+water_data$X.country_id.f <- as.factor(water_data$X.country_id)
+water_data$X.water_source.f <- as.factor(water_data$X.water_source)
+water_data$X.water_tech.f <- as.factor(water_data$X.water_tech)
+water_data$X.country_name.f <- as.factor(water_data$X.country_name)
+
+
+#########################################
+# Report date 
+water_data <- water_data %>% mutate(Report.Dt = lubridate::mdy(stringr::str_sub(X.report_date , 1 , 10 )))
+
+## Split the Report date by year and month . 
+
+water_data <- water_data %>% mutate(Report.Yr = lubridate::year(Report.Dt) , Report.Month = lubridate::month(Report.Dt , label = TRUE , abbr = TRUE))
+
+```
+### This report is for analyizing Water Point Data . This data consists of  `r nrow(water_data)`  records . These are the various water point data uploaded into Water Point Data Exchange across the world .
+
+### The information of water point data consists of the location of water source , country  name , the water source such as borewell , tap etc , technology with which water is made  available , the source who reported the water point , quality of water , and the status of water point i.e whether  water was available at the time of reporting.  
+
+
+### 1. Checking  for zero values in the numeric fields . This is done so that if they are important fields , then need to check the reason for zero values.
+
+```{r}
+
+# Get the class of each column
+ y <- sapply(water_data  , class)
+ 
+ # Select the numeric or integer columns 
+ numeric_cols <- y[y =="numeric" | y == "integer"]
+ 
+ # Check for zero value or NA value in the numeric columns 
+  check_zero <- function(t){ t == 0 | is.na(t)}
+ 
+ x <- apply(water_data[,names(numeric_cols)] , 2, check_zero)
+ 
+ # Get the sum of the column sums for zero value /NA value 
+ apply(x, 2, sum)
+ 
+ zero_val_numeric <- water_data %>% filter(X.lat_deg == 0 & X.lon_deg == 0) %>% select(Report.Dt) %>% count()
+
+```
+### It is shown that `r zero_val_numeric` records have zero latitude and longitude values .
+
+### Check the details of those records as follows:   
+
+```{r}
+
+
+ water_data %>% filter(X.lat_deg == 0 & X.lon_deg == 0) %>% select(X.status_id.f , X.water_source.f , X.water_tech.f, X.source.f, X.country_id.f , X.lat_deg, X.lon_deg, Report.Dt) %>% summary()
+
+
+```
+
+### 2. Water_tech and water_source values need to be cleant . There is no standard value for each type of water source and water technology . This hampers in modelling for prediction of water status and is not informative.
+
+```{r}
+
+water_sources <- table(water_data$X.water_source.f)
+ 
+ water_sources <- water_data %>% group_by(X.water_source.f) %>% count(sort = TRUE)
+ 
+ water_sources[1:30,] %>% ggplot(aes(reorder(X.water_source.f , -n) , n )) + geom_bar(stat = "identity", fill ="orange") + coord_flip() + labs(title ="Water Source names" , y= "count" , x = "water sources")
+ 
+ water_tech <- water_data %>% filter(X.water_tech != "") %>%  group_by(X.water_tech.f) %>% count(sort = TRUE)
+
+water_tech[1:35,] %>% ggplot(aes(reorder(X.water_tech.f,-n) , n )) + geom_bar(stat = "identity", fill ="green") + coord_flip() + labs(title ="Water Tech names" , y= "count" , x = "water tech")
+
+```
+
+###3.  How many waterpoints are uploaded by year and how many are of them are functional ? The following graph provides the required information.
+
+```{r}
+water_data <- water_data %>% mutate(Report.Yr = lubridate::year(Report.Dt) , Report.Month = lubridate::month(Report.Dt , label = TRUE , abbr = TRUE))
+
+water_data_count <- water_data %>% group_by( Report.Yr , Report.Month , X.status_id) %>% count(sort = TRUE)
+
+water_data_count %>% ggplot(aes(Report.Yr , n)) + geom_bar(stat= "identity" , aes(fill = Report.Month)) + facet_wrap(~ X.status_id , ncol = 1 , labeller = "label_both") +
+  ggtitle("Number of reported water points ") + xlab("Reported Year") + ylab("count")
+
+```
+
+### The upload of water point records by year shows that it is negatively skewed. 
+
+```{r}
+
+summary(water_data_count$n)
+
+```
+
+### Hence displaying the water point records for years that have uploads more than  238 .
+
+```{r}
+
+water_data_count %>% filter(n >= 238) %>% ggplot(aes(Report.Yr , n)) + geom_bar(stat= "identity" , aes(fill = Report.Month)) + facet_wrap(~ X.status_id , ncol = 1 , labeller = "label_both") +
+  ggtitle("Number of reported water points > 238 ") + xlab("Reported Year") + ylab("count")
+
+```
+
+### 4. Distribution of waterpoints by country .
+
+```{r}
+
+water_data %>% group_by(X.country_name.f, X.status_id.f) %>% count(sort = TRUE) %>% filter(n > 1000) %>% ggplot(aes(reorder(X.country_name.f, -n) ,n)) + geom_bar(stat = "identity", aes(fill = X.status_id.f)) + coord_flip() + labs(y= "count" , x = "country" , title = "Water Point distribution by Country" , fill = "Status", subtitle = "Displaying count > 1000")
+
+```
+
+### 5. Visualizing the distribution on map . This is to display first 1000 water points. 
+### Water points can be clustered further and displayed on the map. 
+### It helps in understanding the proximity of the water points .
+```{r}
+
+library(leaflet)
+
+water_map_data <- water_data %>% filter(X.lat_deg != 0 & X.lon_deg != 0 ) %>% 
+  mutate(popup = paste(X.source  ,X.status_id , sep = ", status = "))
+
+
+########## Creating different icons based on the status_id
+
+lat.lon <- water_map_data %>% select(X.lat_deg,X.lon_deg, popup, X.status_id.f) %>% head(1000)
+
+## Create icons based on the status values
+getColor <- function(df){
+  
+  sapply(df$X.status_id.f , function(X.status_id.f){
+    
+    if(X.status_id.f == "yes"){
+      "green"
+    }
+    else if(X.status_id.f == "no"){
+      "red"
+    }
+    else  {
+      "orange"
+  }
+  })
+  }
+
+icons <- awesomeIcons(
+  icon = 'ios-close',
+  iconColor = 'black',
+  library = 'ion',
+  markerColor = getColor(lat.lon)
+)
+  
+
+water_map2 <- leaflet() %>% addTiles() %>% addAwesomeMarkers(data = lat.lon , lng =  lat.lon$X.lon_deg , lat =  lat.lon$X.lat_deg , icon = icons, label = lat.lon$popup )
+
+water_map2
+
+```
+
+### 6. Water points distribution by Country and the Reporting Year 
+
+```{r}
+water_data  %>% group_by(X.country_name.f, Report.Yr, X.status_id.f) %>% count(sort = TRUE) %>% filter(n > 5000) %>% ggplot(aes(x= reorder(X.country_name.f, -n) , y= n)) + geom_bar( stat = "identity", aes(fill = as.factor(Report.Yr)))  + coord_flip() + labs(y= "Count" , x = "country" , title = "Water Point distribution by Country and Year" , fill = "Reporting Year ", subtitle = "Displaying count > 5000") + facet_wrap(~ X.status_id.f , ncol =1)
+
+```
+
+### 7. Source of the uploaded water point is a mandatory field. It provides the name of the organization collecting and reporting the data record.
+### Distribution of water points by the sources and to check  many are functional ?
+
+```{r}
+
+q <- water_data  %>% select(X.source.f, X.status_id.f) %>% group_by(X.source.f, X.status_id.f) %>% count(sort = TRUE) 
+
+## Check for status of the water source to see how many of them are functional 
+
+#q$X.source.f <- factor(q$X.source.f , levels = q$X.source.f[order(q$n , decreasing = TRUE)])
+
+ q[1:20,] %>%  ggplot(aes(reorder(X.source.f, -n) ,y = n )) + geom_bar( stat = "identity" , aes(fill = X.status_id.f) ) +  theme(axis.text.x = element_text(angle = 90, hjust =1))  +
+  labs(fill = "Status" , title = "Water points by Reporting Sources " , subtitle = "Top 20 Counts of Sources with their status ", x= "Source" , y = "Count" ) + coord_flip()
+
+```
+
+### 8. What are the  various status descriptions which tells the condition of a waterpoint? Can we understand the most common problems related to non functionality of water point ?
+
+```{r}
+
+water.functionality <- water_data %>% filter(X.status != "") %>% group_by(X.status, X.status_id.f) %>% count( sort = TRUE) 
+
+water.functionality[1:25,] %>% ggplot(aes(reorder(X.status, -n), n )) + geom_bar(stat = "identity", aes(fill = X.status_id.f) ) + coord_flip() +
+  labs(title = "Water point Status Description ", subtitle = "Top 25 Status description" , fill = "status")
+
+### Display the top 20 status description by status type 
+
+ water.functionality %>% filter(X.status_id.f == "yes") %>% head(10) %>% ggplot(aes(reorder(X.status, -n), n )) + geom_bar(stat = "identity", fill = "orange" ) + coord_flip() +
+  labs(title = "Water point Status Description ", subtitle = "Top 10 Status description for 'Yes' status " , fill = "status" , x= "Status description" , y = "count")
+ 
+ water.functionality %>% filter(X.status_id.f == "no") %>% head(10) %>% ggplot(aes(reorder(X.status, -n), n )) + geom_bar(stat = "identity", fill = "green" ) + coord_flip() +
+  labs( subtitle = "Top 10 Status description for 'No' status " , fill = "status", x= "Status description" , y = "count")
+
+ water.functionality %>% filter(X.status_id.f == "unknown") %>% head(10) %>% ggplot(aes(reorder(X.status,-n), n )) + geom_bar(stat = "identity", fill = "pink" ) + coord_flip() +
+  labs( subtitle = "Top 10 Status description for 'Unknown' status " , fill = "status" ,   y = "count" , x= "Status description")
+
+
+```
